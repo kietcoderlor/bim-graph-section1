@@ -1,0 +1,13 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Outputs
+graph.json
+nodes.csv
+edges.csv
+facts.tsv
+
+# IFC samples (tuỳ bạn)
+*.ifc
