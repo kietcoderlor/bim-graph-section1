@@ -4,6 +4,8 @@ import csv
 import ifcopenshell
 import networkx as nx
 import math
+import os
+
 
 
 def node_id(ent):
@@ -219,6 +221,15 @@ def export_facts(G: nx.MultiDiGraph, facts_tsv="facts.tsv"):
 def main(ifc_path: str, out_json: str = "graph.json"):
     model = ifcopenshell.open(ifc_path)
     G = nx.MultiDiGraph()
+        # Put all outputs next to out_json
+    out_dir = os.path.dirname(out_json)
+    if out_dir == "":
+        out_dir = "."
+    os.makedirs(out_dir, exist_ok=True)
+
+    nodes_csv = os.path.join(out_dir, "nodes.csv")
+    edges_csv = os.path.join(out_dir, "edges.csv")
+    facts_tsv = os.path.join(out_dir, "facts.tsv")
 
     # --- Nodes (robust across schemas incl. IFC4X3) ---
     elements = safe_by_type(model, "IfcElement")
@@ -349,12 +360,12 @@ def main(ifc_path: str, out_json: str = "graph.json"):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     # --- Dual-output exports ---
-    idx_map, node_type_to_id, edge_type_to_id = export_csv_nodes_edges(G, nodes_csv="nodes.csv", edges_csv="edges.csv")
-    export_facts(G, facts_tsv="facts.tsv")
+    idx_map, node_type_to_id, edge_type_to_id = export_csv_nodes_edges(G, nodes_csv=nodes_csv, edges_csv=edges_csv)
+    export_facts(G, facts_tsv=facts_tsv)
 
     print(f"✅ Wrote {out_json}")
-    print(f"✅ Wrote nodes.csv / edges.csv (ML-ready indices)")
-    print(f"✅ Wrote facts.tsv (Reasoning-ready triples)")
+    print(f"✅ Wrote {nodes_csv} / {edges_csv} (ML-ready indices)")
+    print(f"✅ Wrote {facts_tsv} (Reasoning-ready triples)")
     print(f"   schema={data['schema']}")
     print(f"   nodes={data['num_nodes']}, edges={data['num_edges']}")
 
