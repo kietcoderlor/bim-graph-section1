@@ -41,105 +41,260 @@ def main(sec1_dir: str, sec2_dir: str):
     # --- apply rules once (v0). later you can do fixpoint chaining.
     precedence_rows = []
     derived_new = []
-    constraints = [] 
+    constraints = []
+    new_facts_added = True
+    max_iters = 5
+    iter_no = 0
 
     step = 0
 
-    # R1 precedence
-    for row in rules_v0.rule_slab_before_above(all_facts):
-        step += 1
-        precedence_rows.append(row)
-        src = row["src"]  # slab
-        dst = row["dst"]  # element above slab
+    while new_facts_added and iter_no < max_iters:
+        iter_no += 1
+        new_facts_added = False
 
-        evidence = []
-        # evidence core: dst above src
-        evidence += get_fact(fb, dst, "above", src)
+        current_facts = list(fb.facts)
 
-        # if bạn đã siết R1 theo has_type(slab)=IfcSlab thì thêm evidence này:
-        evidence += get_fact(fb, src, "has_type", "IfcSlab")
+        # R1: slab -> element above slab  (edge + derived requires_before fact)
+        for row in rules_v0.rule_slab_before_above(current_facts):
+            step += 1
+            precedence_rows.append(row)
 
-        # storey evidence (nếu có)
-        # (không bắt buộc, nhưng rất tốt để paper)
-        # Note: storey id không nằm trong row, ta lấy từ fb:
-        # Cách lấy storey của một element:
-        # - duyệt facts in_storey của element
-        for s, p, o in fb.get("in_storey"):
-            if s == src:
-                evidence.append([s, p, o])
-            if s == dst:
-                evidence.append([s, p, o])
+            # also write as derived fact
+            rb_fact = (row["src"], "requires_before", row["dst"])
+            if fb.add(rb_fact):
+                derived_new.append(rb_fact)
+                new_facts_added = True
 
-        append_trace(trace_path, {
-            "step": step,
-            "rule_id": row["rule_id"],
-            "bindings": {"slab": src, "elem": dst},
-            "evidence": evidence,
-            "new_edges": [row],
-            "new_facts": []
-        })
+            src = row["src"]  # slab
+            dst = row["dst"]  # element
+            evidence = []
+            evidence += get_fact(fb, dst, "above", src)
+            evidence += get_fact(fb, src, "has_type", "IfcSlab")
+            for s, p, o in fb.get("in_storey"):
+                if s == src or s == dst:
+                    evidence.append([s, p, o])
 
-    # R2 wall->door/window + HARD constraint cannot_before(opening, wall)
-    for row in rules_v0.rule_wall_before_door(all_facts):
-        step += 1
-        precedence_rows.append(row)
+            append_trace(trace_path, {
+                "step": step,
+                "iter": iter_no,
+                "rule_id": row["rule_id"],
+                "bindings": {"slab": src, "elem": dst},
+                "evidence": evidence,
+                "new_edges": [row],
+                "new_facts": [[rb_fact[0], rb_fact[1], rb_fact[2]]]
+            })
 
-        src = row["src"]  # wall
-        dst = row["dst"]  # opening (door/window)
+        current_facts = list(fb.facts)
 
-        evidence = []
-        evidence += get_fact(fb, src, "adjacent", dst)
+        # R2: wall -> door/window (edge + derived requires_before + hard constraint cannot_before)
+        for row in rules_v0.rule_wall_before_door(current_facts):
+            step += 1
+            precedence_rows.append(row)
 
-        # wall can be IfcWallStandardCase or IfcWall
-        evidence += get_fact(fb, src, "has_type", "IfcWallStandardCase")
-        if not evidence:
-            evidence += get_fact(fb, src, "has_type", "IfcWall")
+            rb_fact = (row["src"], "requires_before", row["dst"])
+            if fb.add(rb_fact):
+                derived_new.append(rb_fact)
+                new_facts_added = True
 
-        # opening can be door/window (depending on your rule implementation)
-        evidence += get_fact(fb, dst, "has_type", "IfcDoor")
-        if not evidence:
-            evidence += get_fact(fb, dst, "has_type", "IfcWindow")
+            # hard constraint
+            constraints.append((row["dst"], "cannot_before", row["src"]))
 
-        # storey evidence (optional but good)
-        for s, p, o in fb.get("in_storey"):
-            if s == src or s == dst:
-                evidence.append([s, p, o])
+            src = row["src"]  # wall
+            dst = row["dst"]  # opening
+            evidence = []
+            evidence += get_fact(fb, src, "adjacent", dst)
+            evidence += get_fact(fb, src, "has_type", "IfcWallStandardCase")
+            if not evidence:
+                evidence += get_fact(fb, src, "has_type", "IfcWall")
+            evidence += get_fact(fb, dst, "has_type", "IfcDoor")
+            if not evidence:
+                evidence += get_fact(fb, dst, "has_type", "IfcWindow")
+            for s, p, o in fb.get("in_storey"):
+                if s == src or s == dst:
+                    evidence.append([s, p, o])
 
-        append_trace(trace_path, {
-            "step": step,
-            "rule_id": row["rule_id"],
-            "bindings": {"wall": src, "opening": dst},
-            "evidence": evidence,
-            "new_edges": [row],
-            "new_facts": []
-        })
+            append_trace(trace_path, {
+                "step": step,
+                "iter": iter_no,
+                "rule_id": row["rule_id"],
+                "bindings": {"wall": src, "opening": dst},
+                "evidence": evidence,
+                "new_edges": [row],
+                "new_facts": [[rb_fact[0], rb_fact[1], rb_fact[2]],
+                            [dst, "cannot_before", src]]
+            })
 
-        # HARD constraint: opening cannot be before wall
-        constraints.append((dst, "cannot_before", src))
+        current_facts = list(fb.facts)
+
+        # R3: beam -> member (edge + derived requires_before fact)
+        for row in rules_v0.rule_beam_before_member(current_facts):
+            step += 1
+            precedence_rows.append(row)
+
+            rb_fact = (row["src"], "requires_before", row["dst"])
+            if fb.add(rb_fact):
+                derived_new.append(rb_fact)
+                new_facts_added = True
+
+            src = row["src"]  # beam
+            dst = row["dst"]  # member
+            evidence = []
+            evidence += get_fact(fb, src, "adjacent", dst)
+            evidence += get_fact(fb, src, "has_type", "IfcBeam")
+            evidence += get_fact(fb, dst, "has_type", "IfcMember")
+            for s, p, o in fb.get("in_storey"):
+                if s == src or s == dst:
+                    evidence.append([s, p, o])
+
+            append_trace(trace_path, {
+                "step": step,
+                "iter": iter_no,
+                "rule_id": row["rule_id"],
+                "bindings": {"beam": src, "member": dst},
+                "evidence": evidence,
+                "new_edges": [row],
+                "new_facts": [[rb_fact[0], rb_fact[1], rb_fact[2]]]
+            })
+
+        current_facts = list(fb.facts)
+        
+        #R5 column -> Beam
+        current_facts = list(fb.facts)
+        for row in rules_v0.rule_column_before_beam(current_facts):
+            step += 1
+            precedence_rows.append(row)
+
+            rb_fact = (row["src"], "requires_before", row["dst"])
+            if fb.add(rb_fact):
+                derived_new.append(rb_fact)
+                new_facts_added = True
+
+            src = row["src"]  # column
+            dst = row["dst"]  # beam
+
+            evidence = []
+            evidence += get_fact(fb, src, "adjacent", dst)
+            evidence += get_fact(fb, src, "has_type", "IfcColumn")
+            evidence += get_fact(fb, dst, "has_type", "IfcBeam")
+            for s, p, o in fb.get("in_storey"):
+                if s == src or s == dst:
+                    evidence.append([s, p, o])
+
+            append_trace(trace_path, {
+                "step": step,
+                "iter": iter_no,
+                "rule_id": row["rule_id"],
+                "bindings": {"column": src, "beam": dst},
+                "evidence": evidence,
+                "new_edges": [row],
+                "new_facts": [[rb_fact[0], rb_fact[1], rb_fact[2]]]
+            })
+            
+        #R6 Beam -> Slab
+        current_facts = list(fb.facts)
+        for row in rules_v0.rule_beam_before_slab(current_facts):
+            step += 1
+            precedence_rows.append(row)
+
+            rb_fact = (row["src"], "requires_before", row["dst"])
+            if fb.add(rb_fact):
+                derived_new.append(rb_fact)
+                new_facts_added = True
+
+            src = row["src"]  # beam
+            dst = row["dst"]  # slab
+
+            evidence = []
+            # evidence can come from adjacent OR above depending on how rule fired
+            evidence += get_fact(fb, src, "adjacent", dst)
+            evidence += get_fact(fb, dst, "adjacent", src)
+            evidence += get_fact(fb, dst, "above", src)  # slab above beam case
+            evidence += get_fact(fb, src, "has_type", "IfcBeam")
+            evidence += get_fact(fb, dst, "has_type", "IfcSlab")
+            for s, p, o in fb.get("in_storey"):
+                if s == src or s == dst:
+                    evidence.append([s, p, o])
+
+            append_trace(trace_path, {
+                "step": step,
+                "iter": iter_no,
+                "rule_id": row["rule_id"],
+                "bindings": {"beam": src, "slab": dst},
+                "evidence": evidence,
+                "new_edges": [row],
+                "new_facts": [[rb_fact[0], rb_fact[1], rb_fact[2]]]
+            })
+        
+        #R7
+        current_facts = list(fb.facts)
+        for row in rules_v0.rule_slab_before_wall(current_facts):
+            step += 1
+            precedence_rows.append(row)
+
+            rb_fact = (row["src"], "requires_before", row["dst"])
+            if fb.add(rb_fact):
+                derived_new.append(rb_fact)
+                new_facts_added = True
+
+            src = row["src"]  # slab
+            dst = row["dst"]  # wall
+
+            evidence = []
+            evidence += get_fact(fb, dst, "above", src)   # wall above slab
+            evidence += get_fact(fb, src, "adjacent", dst)
+            evidence += get_fact(fb, src, "has_type", "IfcSlab")
+            evidence += get_fact(fb, dst, "has_type", "IfcWallStandardCase")
+            if not evidence:
+                evidence += get_fact(fb, dst, "has_type", "IfcWall")
+
+            for s, p, o in fb.get("in_storey"):
+                if s == src or s == dst:
+                    evidence.append([s, p, o])
+
+            append_trace(trace_path, {
+                "step": step,
+                "iter": iter_no,
+                "rule_id": row["rule_id"],
+                "bindings": {"slab": src, "wall": dst},
+                "evidence": evidence,
+                "new_edges": [row],
+                "new_facts": [[rb_fact[0], rb_fact[1], rb_fact[2]]]
+            })
 
 
+        # R4: supports from above (facts)
+        for fact in rules_v0.rule_supports_from_above(current_facts):
+            if fb.add(fact):
+                derived_new.append(fact)
+                new_facts_added = True
 
-    # R3 beam->member
-    for row in rules_v0.rule_beam_before_member(all_facts):
-        step += 1
-        precedence_rows.append(row)
-        append_trace(trace_path, {
-            "step": step,
-            "rule_id": row["rule_id"],
-            "bindings": {"src": row["src"], "dst": row["dst"]},
-            "evidence": row["evidence"],
-            "new_edges": [row],
-            "new_facts": []
-        })
+                step += 1
+                append_trace(trace_path, {
+                    "step": step,
+                    "iter": iter_no,
+                    "rule_id": "R4_SUPPORTS_FROM_ABOVE",
+                    "bindings": {"support": fact[0], "supported": fact[2]},
+                    "evidence": get_fact(fb, fact[2], "above", fact[0]),
+                    "new_edges": [],
+                    "new_facts": [[fact[0], fact[1], fact[2]]]
+                })
 
-    # R4 supports fact
-    for fact in rules_v0.rule_supports_from_above(all_facts):
-        if fb.add(fact):
-            derived_new.append(fact)
+    best = {}
+    for r in precedence_rows:
+        key = (r["src"], r["dst"], r["edge_type"])
+        if key not in best or float(r["confidence"]) > float(best[key]["confidence"]):
+            best[key] = r
+    precedence_rows = list(best.values())
+    precedence_rows = [r for r in precedence_rows if r["src"] != r["dst"]]
+    
+
 
     # write outputs
     write_facts_tsv(derived_path, derived_new)
     write_precedence_csv(precedence_path, precedence_rows)
+    logic_graph_path = os.path.join(sec2_dir, "construction_logic_graph.csv")
+    write_precedence_csv(logic_graph_path, precedence_rows)
+    print("logic_graph:", logic_graph_path)
 
     # create empty enriched_facts.tsv if not exists (helps pipeline stability)
     if not os.path.exists(enriched_path):

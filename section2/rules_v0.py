@@ -29,12 +29,25 @@ def build_above_pairs(facts: List[Fact]) -> List[Tuple[str, str]]:
 def rule_slab_before_above(facts: List[Fact]):
     """
     If x above y AND y is IfcSlab -> y must be before x.
+    Filter dst types to avoid noisy precedence (e.g., slab->slab, slab->railing).
     """
     t = type_of(facts)
+
+    allowed_dst = {
+        "IfcWall", "IfcWallStandardCase",
+        "IfcColumn", "IfcBeam", "IfcMember",
+        "IfcStair",
+        # "IfcDoor", "IfcWindow",  # bật nếu bạn muốn slab->opening
+    }
+
     outs = []
     for x, y in build_above_pairs(facts):
+        # x above y
         if t.get(y) != "IfcSlab":
             continue
+        if t.get(x) not in allowed_dst:
+            continue
+
         outs.append({
             "src": y, "dst": x,
             "edge_type": "requires_before",
@@ -128,3 +141,133 @@ def rule_supports_from_above(facts: List[Fact]):
     for x, y in build_above_pairs(facts):
         new_facts.append((y, "supports", x))
     return new_facts
+
+def rule_column_before_beam(facts: List[Fact]):
+    """
+    Column -> Beam if same storey and adjacent.
+    """
+    t = type_of(facts)
+    st = storey_of(facts)
+    adj = build_adj_set(facts)
+
+    outs = []
+    for a, b in adj:
+        if a in st and b in st and st[a] != st[b]:
+            continue
+
+        if t.get(a) == "IfcColumn" and t.get(b) == "IfcBeam":
+            outs.append({
+                "src": a, "dst": b,
+                "edge_type": "requires_before",
+                "rule_id": "R5_COLUMN_BEFORE_BEAM",
+                "confidence": 0.72,
+                "evidence": "adjacent|has_type|in_storey"
+            })
+        if t.get(b) == "IfcColumn" and t.get(a) == "IfcBeam":
+            outs.append({
+                "src": b, "dst": a,
+                "edge_type": "requires_before",
+                "rule_id": "R5_COLUMN_BEFORE_BEAM",
+                "confidence": 0.72,
+                "evidence": "adjacent|has_type|in_storey"
+            })
+    return outs
+
+def rule_beam_before_slab(facts: List[Fact]):
+    """
+    Beam -> Slab if same storey and (adjacent OR slab above beam).
+    This avoids edge explosion.
+    """
+    t = type_of(facts)
+    st = storey_of(facts)
+    adj = build_adj_set(facts)
+    above = set(build_above_pairs(facts))  # (x above y)
+
+    outs = []
+
+    # Adjacent-based
+    for a, b in adj:
+        if a in st and b in st and st[a] != st[b]:
+            continue
+
+        if t.get(a) == "IfcBeam" and t.get(b) == "IfcSlab":
+            outs.append({
+                "src": a, "dst": b,
+                "edge_type": "requires_before",
+                "rule_id": "R6_BEAM_BEFORE_SLAB",
+                "confidence": 0.70,
+                "evidence": "adjacent|has_type|in_storey"
+            })
+        if t.get(b) == "IfcBeam" and t.get(a) == "IfcSlab":
+            outs.append({
+                "src": b, "dst": a,
+                "edge_type": "requires_before",
+                "rule_id": "R6_BEAM_BEFORE_SLAB",
+                "confidence": 0.70,
+                "evidence": "adjacent|has_type|in_storey"
+            })
+
+    # Above-based (slab above beam -> beam before slab)
+    # If slab (x) above beam (y): above(x,y) where x=slab, y=beam
+    for x, y in above:
+        if t.get(x) == "IfcSlab" and t.get(y) == "IfcBeam":
+            if x in st and y in st and st[x] != st[y]:
+                continue
+            outs.append({
+                "src": y, "dst": x,
+                "edge_type": "requires_before",
+                "rule_id": "R6_BEAM_BEFORE_SLAB",
+                "confidence": 0.74,
+                "evidence": "above|has_type|in_storey"
+            })
+
+    return outs
+
+def rule_slab_before_wall(facts: List[Fact]):
+    """Slab -> Wall if same storey and wall is above slab OR adjacent.
+    Prefer above evidence (stronger), fallback adjacent."""
+    t = type_of(facts)
+    st = storey_of(facts)
+    adj = build_adj_set(facts)
+    above = set(build_above_pairs(facts))  # (x above y)
+
+    outs = []
+
+    # above-based: wall above slab -> slab before wall
+    for x, y in above:
+        # x above y
+        if t.get(x) in ("IfcWall", "IfcWallStandardCase") and t.get(y) == "IfcSlab":
+            if x in st and y in st and st[x] != st[y]:
+                continue
+            outs.append({
+                "src": y, "dst": x,
+                "edge_type": "requires_before",
+                "rule_id": "R7_SLAB_BEFORE_WALL",
+                "confidence": 0.80,
+                "evidence": "above|has_type|in_storey"
+            })
+
+    # adjacency-based fallback (weaker)
+    for a, b in adj:
+        if a in st and b in st and st[a] != st[b]:
+            continue
+
+        if t.get(a) == "IfcSlab" and t.get(b) in ("IfcWall", "IfcWallStandardCase"):
+            outs.append({
+                "src": a, "dst": b,
+                "edge_type": "requires_before",
+                "rule_id": "R7_SLAB_BEFORE_WALL",
+                "confidence": 0.65,
+                "evidence": "adjacent|has_type|in_storey"
+            })
+        if t.get(b) == "IfcSlab" and t.get(a) in ("IfcWall", "IfcWallStandardCase"):
+            outs.append({
+                "src": b, "dst": a,
+                "edge_type": "requires_before",
+                "rule_id": "R7_SLAB_BEFORE_WALL",
+                "confidence": 0.65,
+                "evidence": "adjacent|has_type|in_storey"
+            })
+
+    return outs
+
